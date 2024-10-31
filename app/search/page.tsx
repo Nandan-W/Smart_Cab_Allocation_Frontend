@@ -2,13 +2,15 @@
 import { useState, useEffect } from 'react';
 import axios from 'axios';
 import {useRouter} from 'next/navigation';
-
+import { io, Socket } from 'socket.io-client';
 
 declare global {
     interface Window {
         google: any;
     }
 }
+
+const SOCKET_SERVER_URL = 'http://localhost:5000';
 
 interface Booking {
     cabId: string;
@@ -39,6 +41,11 @@ const SearchCabs = () => {
     const [shareCab, setShareCab] = useState(false);
     const [cabs, setCabs] = useState<Cab[]>([]);
 
+    const [socket, setSocket] = useState<Socket | null>(null);;
+    const [connectionStatus, setConnectionStatus] = useState('connected'); // 'connected' or 'connecting'
+    const [pickupCoords, setPickupCoords] = useState<{ lat: number; lng: number } | null>(null);
+
+
     const router = useRouter();
 
     const [searchTime, setSearchTime] = useState<number | null>(null); // Adding state for search time efficiency measurement
@@ -64,6 +71,29 @@ const SearchCabs = () => {
     
         loadGoogleMaps();
 
+
+        const newSocket = io(SOCKET_SERVER_URL);
+        setSocket(newSocket);
+
+        newSocket.on('connect', () => {
+            setConnectionStatus('connected');
+        });
+
+        newSocket.on('disconnect', () => {
+            setConnectionStatus('connecting');
+        });
+
+        // Handle updated cab data
+        newSocket.on('updateCabs', (updatedCabs) => {
+            if (window.location.pathname === '/search' &&pickupCoords && pickupLocation && dropLocation) {
+                setCabs(updatedCabs);
+                initMap(updatedCabs, pickupCoords); // Make sure to define pickupCoords correctly
+            }
+        });
+
+        return () => {
+            newSocket.disconnect();
+        };
         
     }, []);
 
@@ -75,6 +105,7 @@ const SearchCabs = () => {
             console.error('Invalid coordinates');
             return;
         }
+        setPickupCoords(pickupCoords);
 
         const token = localStorage.getItem('token');
         // console.log('Token:', token);
@@ -314,8 +345,15 @@ const SearchCabs = () => {
                         <p>
                             Search time: {searchTime} ms ({resultSource})
                         </p> // Displaying search time and source for results(cache vs computing from memory)
-                    )}
-   
+                )}
+                
+               {/* Connection Status Indicator */}
+                <div>
+                    <span style={{ color: connectionStatus === 'connected' ? 'green' : 'orange' }}>
+                        • {connectionStatus === 'connected' ? 'Connected to server' : 'Connecting to server'}
+                    </span>
+                </div>
+
                 <h3>Available Cabs</h3>
                 <div id="map" style={{margin:'auto', height: '400px', width: '80%' }}></div>
                 <table>
