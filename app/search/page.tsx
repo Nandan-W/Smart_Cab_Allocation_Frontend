@@ -41,6 +41,10 @@ const SearchCabs = () => {
 
     const router = useRouter();
 
+    const [searchTime, setSearchTime] = useState<number | null>(null); // Adding state for search time efficiency measurement
+    const [resultSource, setResultSource] = useState('');
+
+
     useEffect(() => {
         const loadGoogleMaps = () => {
             if (window.google) return; // Prevent loading multiple times
@@ -73,11 +77,11 @@ const SearchCabs = () => {
         }
 
         const token = localStorage.getItem('token');
-        console.log('Token:', token);
+        // console.log('Token:', token);
 
         try {
-            console.log("pickup = ",pickupCoords);
-            console.log("drop = ",dropCoords);
+            // console.log("pickup = ",pickupCoords);
+            // console.log("drop = ",dropCoords);
             const response = await axios.post('http://localhost:5000/api/search/searchCabs', {
                 pickupLocation: pickupCoords,
                 dropLocation: dropCoords,
@@ -88,11 +92,16 @@ const SearchCabs = () => {
                 },
             });
 
+            setSearchTime(response.data.time)
+            const isFromCache = response.data.cache ? "from cache" : "from database";
+            setResultSource(isFromCache);
+
             // Filtering out cabs that are full (currentPassengerCount >= 3)
-            const availableCabs = response.data.filter((cab: Cab) => cab.currentPassengerCount < 3);
+            const availableCabs = response.data.results.filter((cab: Cab) => cab.currentPassengerCount < 3);
             setCabs(availableCabs);
             initMap(availableCabs, pickupCoords);
         } catch (error) {
+
             console.error('Error fetching cabs:', error);
         }
     };
@@ -300,7 +309,13 @@ const SearchCabs = () => {
             </form>
 
             {cabs.length > 0 &&(
-                <>    
+                <> 
+                {searchTime !== null && (
+                        <p>
+                            Search time: {searchTime} ms ({resultSource})
+                        </p> // Displaying search time and source for results(cache vs computing from memory)
+                    )}
+   
                 <h3>Available Cabs</h3>
                 <div id="map" style={{margin:'auto', height: '400px', width: '80%' }}></div>
                 <table>
