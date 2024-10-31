@@ -1,6 +1,8 @@
 "use client";
 import { useState, useEffect } from 'react';
 import axios from 'axios';
+import {useRouter} from 'next/navigation';
+
 
 declare global {
     interface Window {
@@ -8,8 +10,17 @@ declare global {
     }
 }
 
+interface Booking {
+    cabId: string;
+    driverName: string;
+    vehicleType: string;
+    vehicleNumber: string;
+    contactNumber: string;
+    timestamp: Date;
+}
 
 interface Cab {
+    _id:string;
     driverName: string;
     currentLocation: [number, number]; 
     currentAddress:string;
@@ -17,35 +28,39 @@ interface Cab {
     vehicleType: string;
     vehicleNumber: string;
     contactNumber: string;
+    travelCost: number;
+    allowedSharing: boolean;
+    currentPassengerCount: number;
 }
 
 const SearchCabs = () => {
     const [pickupLocation, setPickupLocation] = useState('');
     const [dropLocation, setDropLocation] = useState('');
+    const [shareCab, setShareCab] = useState(false);
     const [cabs, setCabs] = useState<Cab[]>([]);
+
+    const router = useRouter();
 
     useEffect(() => {
         const loadGoogleMaps = () => {
             if (window.google) return; // Prevent loading multiple times
-
-            const script = document.createElement('script');
-            script.src = `https://maps.googleapis.com/maps/api/js?key=${process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY}&libraries=places`;
-            script.async = true;
-            script.defer = true;
-            script.onload = () => {
-                // Google Maps API loaded
-            };
-            document.body.appendChild(script);
-        };
-
-        loadGoogleMaps();
-
-        return () => {
+    
             const existingScript = document.querySelector(`script[src*="maps.googleapis.com"]`);
-            if (existingScript) {
-                document.body.removeChild(existingScript);
+            if (!existingScript) {
+                const script = document.createElement('script');
+                script.src = `https://maps.googleapis.com/maps/api/js?key=${process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY}&libraries=places`;
+                script.async = true;
+                script.defer = true;
+                script.onload = () => {
+                    // Google Maps API loaded
+                };
+                document.body.appendChild(script);
             }
         };
+    
+        loadGoogleMaps();
+
+        
     }, []);
 
     const handleSearch = async (e: React.FormEvent<HTMLFormElement>) => {
@@ -66,14 +81,17 @@ const SearchCabs = () => {
             const response = await axios.post('http://localhost:5000/api/search/searchCabs', {
                 pickupLocation: pickupCoords,
                 dropLocation: dropCoords,
-                shareCab: false, 
+                shareCab,
             }, {
                 headers: {
                     Authorization: `Bearer ${token}`, // Set the Authorization header
                 },
             });
-            setCabs(response.data);
-            initMap(response.data, pickupCoords);
+
+            // Filtering out cabs that are full (currentPassengerCount >= 3)
+            const availableCabs = response.data.filter((cab: Cab) => cab.currentPassengerCount < 3);
+            setCabs(availableCabs);
+            initMap(availableCabs, pickupCoords);
         } catch (error) {
             console.error('Error fetching cabs:', error);
         }
@@ -154,10 +172,99 @@ const SearchCabs = () => {
         }
     };
     
-    
+    // Add the select cab functionality
+    const handleSelectCab = async (cab: Cab) => {
+        
+        console.log(`Cab booked: ${cab.driverName}`);
+
+        // Increase the passenger count
+        const updatedCab = { ...cab, currentPassengerCount: cab.currentPassengerCount + 1 };
+
+        // Update passenger count in the backend
+        await updatePassengerCount(updatedCab, 'increase');
+
+        // Prepare booking details
+        const bookingDetails = {
+            cabId: cab._id,
+            driverName: cab.driverName,
+            vehicleType: cab.vehicleType,
+            vehicleNumber: cab.vehicleNumber,
+            contactNumber: cab.contactNumber,
+            timestamp: new Date(),
+        };
+
+        // Get the userId from the token
+        const token = localStorage.getItem('token');
+        if (!token) {
+            console.error('No token found. User may not be logged in.');
+            return; 
+        }
+        const userId = JSON.parse(atob(token.split('.')[1])).userId;
+        console.log("user id = ",userId);
+
+        // Save the booking to user history
+        await saveBookingToHistory(userId , bookingDetails);
+
+        // Prepare driver details as a query string
+        const driverDetails = JSON.stringify({
+            driverName: cab.driverName,
+            vehicleType: cab.vehicleType,
+            vehicleNumber: cab.vehicleNumber,
+            contactNumber: cab.contactNumber,
+        });
+
+        // Construct the URL with query parameters
+        const queryString = new URLSearchParams({ driverDetails }).toString();
+
+        // Push to the success page with the constructed URL
+        router.push(`/success?${queryString}`);
+
+        // Simulate dropping off the passenger after 10 minutes
+        setTimeout(async () => {
+            console.log(`Passenger dropped off from cab: ${cab.driverName}`);
+            await updatePassengerCount(updatedCab, 'decrease'); // Update passenger count in the backend when dropped off
+        }, 10 * 60 * 1000); // 10 minutes
+    };
+
+    const saveBookingToHistory = async (userId: string,booking: Booking) => {
+        const token = localStorage.getItem('token');
+        try {
+            await axios.post('http://localhost:5000/api/userHistory', {
+                userId,
+                booking,
+            }, {
+                headers: {
+                    Authorization: `Bearer ${token}`,
+                },
+            });
+        } catch (error) {
+            console.error('Error saving booking to history:', error);
+        }
+    };
+
+    // Function to update passenger count in the backend
+    const updatePassengerCount = async (cab: Cab, action: 'increase' | 'decrease') => {
+        try {
+            const newPassengerCount = action === 'increase' ? cab.currentPassengerCount : cab.currentPassengerCount - 1;
+
+            await axios.post('http://localhost:5000/api/cab/updatePassengerCount', {
+                cabId: cab._id,
+                newPassengerCount:newPassengerCount,
+            });
+        } catch (error) {
+            console.error(`Error updating passenger count: ${error}`);
+        }
+    };
+
 
     return (
         <div style={{ textAlign: 'center', padding: '20px' }}>
+            <div style={{width:'100%', display: 'flex'}}>
+                <nav style={{width:'100%', flexDirection: 'row', justifyContent: 'space-between'}}>
+                    <button style={{width:'20%'}} onClick={() => router.push('/search')}>Search</button>
+                    <button style={{width:'20%'}} onClick={() => router.push('/booked-cabs')}>History</button>
+                </nav>
+            </div>
             <h2>Search Cabs Near You</h2>
             <form onSubmit={handleSearch}>
                 <input
@@ -181,43 +288,56 @@ const SearchCabs = () => {
                     onChange={(e) => setDropLocation(e.target.value)}
                     required
                 />
+                <label>
+                    <input
+                        type="checkbox"
+                        checked={shareCab}
+                        onChange={(e) => setShareCab(e.target.checked)}
+                    />
+                    Allow Cab Sharing
+                </label>
                 <button type="submit">Search Cabs</button>
             </form>
 
-
-            <h3>Available Cabs</h3>
-            <div id="map" style={{margin:'auto', height: '400px', width: '80%' }}></div>
-            <table>
-                <thead>
-                    <tr>
-                        <th>Sr. No.</th>
-                        <th>Driver Name</th>
-                        <th>Current Location</th>
-                        <th>Distance</th>
-                        <th>Vehicle Type</th>
-                        <th>Vehicle Number</th>
-                        <th>Contact Number</th>
-                        <th>Select</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    {cabs.map((cab: Cab, index: number) => (
-                        <tr key={index}>
-                            <td>{index + 1}</td>
-                            <td>{cab.driverName}</td>
-                            <td>{cab.currentAddress}</td> {/* Access as an array */}
-                            <td>{cab.distance}</td>
-                            <td>{cab.vehicleType}</td>
-                            <td>{cab.vehicleNumber}</td>
-                            <td>{cab.contactNumber}</td>
-                            <td>
-                                <button>Select</button>
-                            </td>
+            {cabs.length > 0 &&(
+                <>    
+                <h3>Available Cabs</h3>
+                <div id="map" style={{margin:'auto', height: '400px', width: '80%' }}></div>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Sr. No.</th>
+                            <th>Driver Name</th>
+                            <th>Current Location</th>
+                            <th>Distance(in km)</th>
+                            <th>Vehicle Type</th>
+                            <th>Vehicle Number</th>
+                            <th>Contact Number</th>
+                            <th>Travel Cost(in rupees)</th>
+                            <th>Book Cab</th>
                         </tr>
-                    ))}
-                </tbody>
+                    </thead>
+                    <tbody>
+                        {cabs.map((cab: Cab, index: number) => (
+                            <tr key={index} style={{ border: (cab.allowedSharing && cab.currentPassengerCount > 0) ? '2px solid yellow' : '2px solid green' }} >
+                                <td>{index + 1}</td>
+                                <td>{cab.driverName}</td>
+                                <td>{cab.currentAddress}</td> 
+                                <td>{cab.distance}</td>
+                                <td>{cab.vehicleType}</td>
+                                <td>{cab.vehicleNumber}</td>
+                                <td>{cab.contactNumber}</td>
+                                <td>₹{cab.travelCost.toFixed(2)}</td>
+                                <td>
+                                    <button onClick={() => handleSelectCab(cab)}>Book</button>
+                                </td>
+                            </tr>
+                        ))}
+                    </tbody>
 
-            </table>
+                </table>
+                </>
+            ) }
         </div>
     );
 };
